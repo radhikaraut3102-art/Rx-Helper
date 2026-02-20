@@ -1,1 +1,95 @@
+import pytesseract
+from PIL import Image
+import spacy
+import pandas as pd
+from flask import Flask, request, jsonify
 
+app = Flask(__name__)
+
+# Load Medical NLP model (SciSpacy) for Named Entity Recognition 
+nlp = spacy.load("en_core_sci_sm")
+
+# Mock Database for Normalization and Classification [cite: 53, 63, 65]
+EML_LIST = ["Lisinopril", "Metformin", "Amoxicillin", "Paracetamol"]
+ANTIBIOTICS = ["Amoxicillin", "Azithromycin", "Ciprofloxacin"]
+
+class RxAnalyzer:
+    def __init__(self, text):
+        self.raw_text = text
+        self.doc = nlp(text)
+        self.drugs = self._extract_drugs()
+
+    def _extract_drugs(self):
+        """Extracts drug entities from text using NLP[cite: 42, 48]."""
+        # In a real scenario, use SciSpacy's linker to RxNorm [cite: 52]
+        extracted = []
+        for ent in self.doc.ents:
+            # Simple simulation of drug extraction and classification
+            drug_name = ent.text
+            is_generic = True  # Placeholder logic [cite: 71, 72]
+            is_eml = drug_name in EML_LIST [cite: 63]
+            is_antibiotic = drug_name in ANTIBIOTICS [cite: 65]
+            is_injection = "injection" in self.raw_text.lower() # Simple check [cite: 70]
+            
+            extracted.append({
+                "name": drug_name,
+                "is_generic": is_generic,
+                "is_eml": is_eml,
+                "is_antibiotic": is_antibiotic,
+                "is_injection": is_injection
+            })
+        return extracted
+
+    def calculate_who_indicators(self):
+        """Computes WHO Core Prescribing Indicators[cite: 7, 104]."""
+        total_drugs = len(self.drugs)
+        if total_drugs == 0:
+            return {}
+
+        # Formulas based on provided documentation [cite: 13, 15, 17, 19, 21]
+        indicators = {
+            "avg_drugs_per_rx": total_drugs, # For a single rx [cite: 108]
+            "pct_generic": (sum(1 for d in self.drugs if d['is_generic']) / total_drugs) * 100,
+            "pct_eml": (sum(1 for d in self.drugs if d['is_eml']) / total_drugs) * 100,
+            "has_antibiotic": any(d['is_antibiotic'] for d in self.drugs),
+            "has_injection": any(d['is_injection'] for d in self.drugs)
+        }
+        return indicators
+
+    def check_flags(self):
+        """Flags errors like Polypharmacy[cite: 77, 80]."""
+        flags = []
+        if len(self.drugs) >= 5:
+            flags.append("POLYPHARMACY: 5 or more drugs detected.") [cite: 80, 81]
+        
+        # Check for missing info (Simple heuristic) [cite: 82, 83]
+        if "age" not in self.raw_text.lower():
+            flags.append("MISSING_INFO: Patient age not found.")
+            
+        return flags
+
+@app.route('/analyze', methods=['POST'])
+def analyze_prescription():
+    # 1. Ingestion: Support Image or Text [cite: 30]
+    if 'image' in request.files:
+        img = Image.open(request.files['image'])
+        # 2. OCR Extraction 
+        text = pytesseract.image_to_string(img)
+    else:
+        text = request.json.get('text', '')
+
+    # 3. Processing & Analysis
+    analyzer = RxAnalyzer(text)
+    indicators = analyzer.calculate_who_indicators()
+    flags = analyzer.check_flags()
+
+    # 4. Return Structured Results [cite: 145]
+    return jsonify({
+        "extracted_text": text,
+        "drugs_found": analyzer.drugs,
+        "who_indicators": indicators,
+        "alerts": flags
+    })
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
